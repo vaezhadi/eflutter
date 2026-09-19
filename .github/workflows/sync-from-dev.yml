@@ -1,0 +1,68 @@
+name: Sync files from eflutter-dev
+
+on:
+  repository_dispatch:
+    types: [sync-from-dev]
+  workflow_dispatch:
+  schedule:
+    - cron: "*/5 * * * *"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-from-dev
+  cancel-in-progress: true
+
+env:
+  SOURCE_REPOSITORY: vaezhadi/eflutter-dev
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out destination
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download source files
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          rm -rf "$RUNNER_TEMP/source"
+          mkdir -p "$RUNNER_TEMP/source"
+          gh api \
+            -H "Accept: application/vnd.github+json" \
+            "/repos/${SOURCE_REPOSITORY}/tarball" \
+            > "$RUNNER_TEMP/source.tar.gz"
+          tar -xzf "$RUNNER_TEMP/source.tar.gz" \
+            --strip-components=1 \
+            -C "$RUNNER_TEMP/source"
+
+      - name: Replace destination files
+        run: |
+          set -euo pipefail
+          rsync -a --delete \
+            --exclude='.git/' \
+            --exclude='.github/workflows/sync-from-dev.yml' \
+            "$RUNNER_TEMP/source/" "$GITHUB_WORKSPACE/"
+
+      - name: Commit and publish changed files
+        env:
+          DESTINATION_TOKEN: ${{ secrets.SYNC_TOKEN || github.token }}
+        run: |
+          set -euo pipefail
+          if git diff --quiet; then
+            echo "No source changes to publish."
+            exit 0
+          fi
+
+          git config user.name "vaezhadi"
+          git config user.email "vaezhadi@users.noreply.github.com"
+          git add --all
+          git commit -m "Sync files from eflutter-dev"
+          git push \
+            "https://x-access-token:${DESTINATION_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
+            "HEAD:${GITHUB_REF_NAME}"
